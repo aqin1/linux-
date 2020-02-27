@@ -1,0 +1,229 @@
+
+===================IO编程==========================
+
+标准I/O：================================
+均带缓冲区
+动态内存分配：
+void *malloc(size_t num)
+void free(void *p)
+
+FILE *fopen(const char *pathname, const char *mode)
+成功：FILE指针
+失败：NULL
+fopen()创建的文件访问权限是0666(rw-rw-rw-)
+Linux系统的umask设定会影响文件的访问权限，其规则为(0666 &~umask),umask 默认是022，用户可以通过umask函数修改相关设定
+
+extern int errno 	//全局变量，发生错误时由系统赋值
+void perror(const char *s)
+char * strerror(int errno)
+errno 存放错误号，没有错误时，errno=0
+宏：EOF=-1
+perror先输出字符串s，再输出错误号对应的错误信息
+strerror根据错误号返回对应的错误信息
+
+int fclose(FILE *stream)
+成功：0
+失败：-1
+自动刷新缓冲中的数据并释放缓冲区
+当一个程序正常终止时，所有打开的流都会被关闭
+
+int fgetc(FILE *stream)
+从指定流中读取一个字符
+int getchar(void)
+从标准输入流中读取一个字符
+上两个返回值相同
+成功：读取的字符
+失败：EOF
+char *fgets(char *s, int size, FILE *stream)
+从指定的流中读取字符流，遇到'\n'或输入size-1个字符时返回，总是包含'\0'
+成功：读取的字符串
+失败：NULL
+
+int fputc(int c, FILE *stream)
+向指定流中写入字符
+int putchar(int c)
+向标准输出流中输出字符
+上两个返回值相同
+成功：写入的字符
+失败：EOF
+int fputs(const char *s, FILE *stream)
+向指定流中写入字符串
+成功：非负数
+失败：EOF
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+ptr：缓冲区，大小为 size*nmemb
+size：要读取/写入元素的大小，如sizeof(int)
+nmemb：读取/写入多少个大小为size的元素，如3
+成功：返回读取到的元素个数，若到达文件结尾则返回值与nmenb不同
+失败：EOF
+既可以读写文本文件，也可以读写数据文件
+效率高
+
+int fflush(FILE *stream)
+将流缓冲区中的数据写入实际文件，Linux下只能刷新输出缓冲区
+成功：0
+失败：EOF
+
+int fseek(FILE  *stream,  long  offset,  int whence);
+offset：偏移量，可正可负，偏移量是相对于whence而言
+whence：SEEK_SET(头),SEEK_CUR(当前),SEEK_END(结尾)
+成功：0
+失败：-1
+long ftell(FILE *stream);
+获取当前读写位置
+成功：返回当前读写位置
+失败：-1
+void rewind(FILE *stream)
+将流定位到文件开始位置
+
+判断流是否出错或结束
+int feof(FILE *stream);
+返回1表示文件已到末尾，否则返回0
+int ferror(FILE *stream)
+返回1表示流出错，否则返回0
+
+int fprintf(FILE *stream, const char *format, ...);
+向指定流中按格式写入字符串
+int sprintf(char *str, const char *format, ...);
+向指定缓冲区(buf)中按格式写入字符串
+成功：返回输出字符数
+失败：EOF
+
+time()获取系统时间（从某年到现在的秒数）
+localtime()将系统时间转换成本地时间
+sleep()实现程序睡眠，秒数
+
+文件I/O：===============================
+均不带缓冲区
+文件描述符为一个非负整数，从0开始分配，每个程序的文件描述符相互独立，都是从0开始
+0，1，2分别对应标准输入、输出、错误
+
+int open(const char *pathname, int flags, mode_t mode)
+flags：指定打开方式
+mode：指定新建文件的权限，非新建文件可省略
+成功：fd
+失败：-1
+
+ssize_t read(int fd, void *buf, size_t count)
+count：字节数
+成功：读取的字节数
+失败：-1
+返回0表示读到文件末尾
+
+off_t lseek(int fd, off_t offset, int whence)
+注：设备文件不支持定位
+参数与fseek()的一样
+成功：返回当前文件的读写位置
+失败：-1
+
+注：目录的操作和文件的操作是一样的，把目录的内容当作文件内容看待即可
+
+DIR *opendir(const char *name);
+参数：目录路径
+成功：目录流指针
+失败：NULL
+
+struct dirent *readdir(DIR *dirp)
+读取dirp目录的内容，包含文件和目录
+成功：返回目录流dirp中的下一个目录项
+返回NULL：出错或到文件末尾
+
+int closedir(DIR *dirp)
+成功：0
+失败：-1
+
+int chmod(const char *pathname, mode_t mode);
+int fchmod(int fd, mode_t mode)
+修改文件权限，只有root和文件所有者能修改文件访问权限
+mode：权限可以是0666，也可以是宏S_IRUSR等
+成功：0
+失败：-1
+
+int stat(const char *pathname, struct stat *statbuf)
+int fstat(int fd, struct stat *statbuf)
+int lstat(const char *pathname, struct stat *statbuf)
+获取文件属性
+statbuf：存储文件属性buf
+成功：0
+失败：-1
+如果path是符号链接stat获取的是目标文件的属性；而lstat获取的是链接文件的属性
+struct stat结构体的一些成员
+mode_t st_mode;		//类型和访问权限
+uid_t st_uid;		//所有者id
+uid_t st_gid;		//用户组id
+off_t st_size;		//文件大小
+time_t st_mtime;	//最后修改时间
+可以通过以下宏判断文件类型：
+S_ISREG(st_mode)	//普通文件
+S_ISDIR(st_mode)
+S_ISCHR(st_mode)	//字符设备文件
+S_ISBLK(st_mode)
+S_ISFIFO(st_mode)
+S_ISLNK(st_mode)
+S_ISSOCK(st_mode)	//socket文件
+
+#define  S_IFMT    0170000
+可以通过st_mode & S_IFMT 判断文件属性
+#define  S_IREG    0100000
+#define  S_IDIR    0040000
+#define  S_ICHR    0020000
+#define  S_IBLK    0060000
+#define  S_IFIFO   0010000
+#define  S_ILNK    0120000
+#define  S_ISOCK   0140000
+
+权限宏：
+R读,W写,X可执行,U(USR)所有者,G(GRP)所属组,O(OTH)其它用户
+#define  S_IRWXU    00700
+#define  S_IRUSR    00400         
+#define  S_IWUSR    00200        
+#define  S_IXUSR    00100        
+#define  S_IRWXG    00070       
+#define  S_IRGRP    00040
+#define  S_IWGRP    00020 
+#define  S_IXGRP    00010 
+#define  S_IRWXO    00007 
+#define  S_IROTH    00004 
+
+==========================库========================
+创建静态库；
+ar crs libhello.a hello.o 
+查看静态库信息：
+nm libhello.a 
+
+编译test.c并链接静态库libhello.a
+gcc -o test test.c -L. -lhello
+-L. - 是指定链接库目录为当前目录
+-lhello - 是指定链接文件为libhello.a,不需lib和.a
+
+创建共享库：
+编译生成目标文件：
+gcc -c -fPIC hello.c bye.c -Wall
+创建共享库common：
+gcc -shared -o libcommon.so.1 hello.o bye.o
+为共享库文件创建链接文件
+ln -s libcommon.so.1 libcommon.so
+符号链接文件命名规则：
+lib<库名>.so
+编译test.c并链接共享库libcommon.so
+gcc -o test test.c -L. -lcommon
+添加共享库的加载路径：
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:.
+让系统找到共享库的方法：
+1.把库拷贝到/usr/lib和/lib目录下
+2.在LD_LIBRARY_PATH环境变量中添加库所在路径
+3.添加/etc/ld.so.conf.d/*.conf文件爱，执行ldconfig刷新
+
+编译线程：
+gcc -o test test.c -lpthread	//指定链接pthread线程库
+gcc -o test test.c -D_LOCK_		//给test.c定义一个 _LOCK_ 宏
+
+
+
+
+
+
+
+

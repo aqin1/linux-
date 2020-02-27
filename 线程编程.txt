@@ -1,0 +1,172 @@
+====================线程编程=======================
+通常线程指的是共享相同地址空间的多个任务
+	开销小：同一进程中的线程共享相同的地址空间
+	大大提高了任务切换到效率
+	避免了额外的TLB & cache的刷新
+	线程的执行主要是调用线程函数实现的
+同一个进程中的多个线程共享以下资源：
+	可执行的指令
+	静态数据
+	进程中打开的文件描述符
+	当前工作目录
+	用户ID
+	用户组ID
+每个线程私有的资源包括
+	线程ID(TID)
+	PC(程序计数器)和相关寄存器
+	堆栈
+	错误号(errno)
+	优先级
+	执行状态和属性
+pthread线程库中提供了如下基本操作
+	创建线程
+	回收线程
+	结束线程
+同步和互斥机制
+	信号量
+	互斥锁
+由于线程共享相同的地址空间，所以要注意同步
+
+线程的创建：
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr,void *(*start_routine) (void *),void *arg);
+  thread：线程对象
+  attr：线程属性，NULL代表默认属性，一般默认就行
+  start_routine：线程执行的函数
+  arg：传递给 start_routine 函数的参数
+  成功：0 
+  失败：返回错误码
+
+int pthread_join(pthread_t thread, void **retval)
+调用该函数的进程/线程会阻塞，直到thread对象结束
+  thread：要回收的线程对象
+  *retval：接收线程返回值
+  成功：0
+  失败：返回错误码
+
+void pthread_exit(void *retval)
+结束当前线程，线程私有资源被释放
+  retval：返回值，可以被其它线程通过 pthread_join 获取；由于线程结束后资源会被释放，所以retval不能是栈中的地址(局部变量)
+用pthread_exit()结束线程,而exit()是结束进程的,不能用于结束线程
+
+编译线程程序：
+gcc -o test test.c -lpthread	//指定链接线程库的名称，libpthread适用与POSIX标准
+
+同步：
+同步是指多个任务按照约定的先后次序相互配合完成一件事情
+信号量：
+  信号量是一种同步机制，由信号量来决定线程是继续运行还是阻塞等待
+  信号量代表某一类资源，其值表示系统中该资源的数量
+  信号量是一个受保护的“变量”，只能通过三中操作来访问
+	1.初始化
+	2.P操作(申请资源)
+	3.V操作(释放资源)
+信号量的 P/V操作
+  P(S)含义如下：
+  if(信号量的值大于0){申请资源的任务继续运行；
+						信号量的值减一；}
+  else{申请资源的任务阻塞；}
+  
+  V(S)含义如下：
+  信号量的值加一；
+  if(有任务在等待资源){唤醒等待的任务，让其继续运行}
+POSIX中定义了两类信号量
+  无名信号量(基于内存的信号量)，主要用于进程组的线程之间的通信
+  又名信号量
+pthread库常用的信号量操作函数如下：
+ 1.初始化信号量
+  int sem_init(sem_t *sem, int pshared, unsigned int value)
+  sem：要初始化的信号量
+  pshared：0——表示这个信号量用于线程间；1——用于进程间
+  val：信号量初值，0表示没有资源，1表示有资源
+  成功：0
+  失败：-1
+ 2.P操作：
+  int sem_wait(sem_t *sem)
+  阻塞方式申请资源(信号量)，当执行V操作后，系统会把阻塞的P操作唤醒
+  成功：0
+  失败：-1
+  int sem_trywait(sem_t *sem)
+  非阻塞
+  int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout)
+  定时
+ 3.V操作：
+  int sem_post(sem_t *sem)
+  V操作不会阻塞
+  成功：0
+  失败：-1
+先初始化信号量，然后再创建线程，因为线程之间共享信号量
+命令：ps aux -L  可以查看线程信息
+实现对一个缓冲区buf的读写操作模型：
+	需要两个信号量，sem_r,sem_w
+	一开始buf为空，sem_r=0（不可读）,sem_w=1（可写）
+	有写资源，写线程执行P操作，sem_wait(sem_w),写完后执行V操作释放读资源，sem_post(sem_r)
+	有读资源，读线程执行P操作，sem_wait(sem_r),读完后执行V操作释放写资源，sem_post(sem_w)
+	
+互斥：
+需要安装manpages-posix-dev这个包才能 man 到互斥锁相关函数
+临界资源：一次只允许一个任务(进程、线程)访问的共享资源
+临界区：访问临界区的代码
+互斥机制：
+	mutex互斥锁
+	任务访问临界资源前申请锁，访问完后释放锁
+互斥锁：其实就是告诉其它线程我已占有某个资源(变量)，其它线程不要动它。
+int pthread_mutex_init(pthread_mutex_t *restrict mutex,const pthread_mutexattr_t *restrict attr)
+	*restrict mutex：要初始化的互斥锁对象
+	*restrict attr：互斥锁属性，NULL代表默认属性，一般默认就行
+	成功：0
+	失败：返回错误码
+int pthread_mutex_lock(pthread_mutex_t *mutex);
+加锁，无法获得锁，任务阻塞
+	mutex：要加锁的互斥锁对象
+	成功：0
+	失败：返回错误码
+int pthread_mutex_trylock(pthread_mutex_t *mutex);
+非阻塞方式加锁
+	mutex：要加锁的互斥锁对象
+	成功：0
+	失败：返回错误码
+int pthread_mutex_unlock(pthread_mutex_t *mutex)
+解锁，执行完临界区要及时释放锁
+	mutex：要解锁的互斥锁对象
+	成功：0
+	失败：返回错误码
+互斥锁实现：
+	int value;
+	//线程共享全局变量
+	pthread_mutex_t lock;
+	//互斥锁应该为线程共享变量，所以定义为全局变量
+int main()
+{
+	pthread_t test_pthread;		//线程对象
+	pthread_mutex_init(&lock,NULL);	//先初始化锁
+	pthread_create();		//后创建线程
+	pthread_mutex_lock(&lock);	//加锁，该线程占有value
+	value = 1;					//读写数据
+	pthread_mutex_unlock;		//解锁
+}
+void *p_function(void *arg)
+{
+	pthread_mutex_lock(&lock);	//加锁，该线程占有value
+	value = 2;					//读写数据
+	pthread_mutex_unlock(&lock);	//解锁
+}
+死锁：
+存在两个线程P1,P2;两个资源A,B
+    P1          P2
+对A资源加锁    对B资源加锁
+对B资源加锁    对A资源加锁
+P1先占有A资源，此时P1线程时间片结束
+接着P2占有B资源，然后去申请A资源，申请不到，阻塞，时间片到
+最后P1申请B资源，申请不到，阻塞
+这样就会使得P1、P2均阻塞，称为死锁
+
+	
+
+	
+
+
+
+
+
+
+
