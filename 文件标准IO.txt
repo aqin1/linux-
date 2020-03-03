@@ -7,19 +7,29 @@
 void *malloc(size_t num)
 void free(void *p)
 
+
+
+=============出错处理==========================
+extern int errno 	//全局变量，发生错误时由系统赋值
+void perror(const char *s)
+char * strerror(int errno)
+errno 存放错误号，没有错误时，errno=0
+注意：发生错误后 errno 会被标志，但是调用成功errno不会重置为0，所以errno != 0 可能是上次调用失败造成的
+并不是所有的调用失败都会设置errno和返回-1
+宏：EOF=-1
+错误的宏在 errno.h 中
+perror先输出字符串s，再输出错误号对应的错误信息
+strerror根据错误号返回对应的错误信息
+
+===============文件操作=====================
 FILE *fopen(const char *pathname, const char *mode)
 成功：FILE指针
 失败：NULL
 fopen()创建的文件访问权限是0666(rw-rw-rw-)
 Linux系统的umask设定会影响文件的访问权限，其规则为(0666 &~umask),umask 默认是022，用户可以通过umask函数修改相关设定
 
-extern int errno 	//全局变量，发生错误时由系统赋值
-void perror(const char *s)
-char * strerror(int errno)
-errno 存放错误号，没有错误时，errno=0
-宏：EOF=-1
-perror先输出字符串s，再输出错误号对应的错误信息
-strerror根据错误号返回对应的错误信息
+FILE *fdopen(int fd, const char *mode)
+通过 fd 获取 FILE
 
 int fclose(FILE *stream)
 成功：0
@@ -91,6 +101,17 @@ int sprintf(char *str, const char *format, ...);
 成功：返回输出字符数
 失败：EOF
 
+fcntl一般有三种用法,对应三种函数原型(实际上fcntl只有一种原型)
+int fcntl(int fd, int cmd); 
+int fcntl(int fd, int cmd, long arg); 
+int fcntl(int fd, int cmd, struct flock *lock);
+fcntl函数有5种功能：
+1. 复制一个现有的描述符(cmd=F_DUPFD). 
+2. 获得／设置文件描述符标记(cmd=F_GETFD或F_SETFD). 
+3. 获得／设置文件状态标记(cmd=F_GETFL或F_SETFL). 
+4. 获得／设置异步I/O所有权(cmd=F_GETOWN或F_SETOWN). 
+5. 获得／设置记录锁(cmd=F_GETLK , F_SETLK或F_SETLKW).
+
 time()获取系统时间（从某年到现在的秒数）
 localtime()将系统时间转换成本地时间
 sleep()实现程序睡眠，秒数
@@ -105,6 +126,9 @@ flags：指定打开方式
 mode：指定新建文件的权限，非新建文件可省略
 成功：fd
 失败：-1
+
+int fileno(FILE *stream)
+通过 FILE 获取 fd
 
 ssize_t read(int fd, void *buf, size_t count)
 count：字节数
@@ -186,6 +210,61 @@ R读,W写,X可执行,U(USR)所有者,G(GRP)所属组,O(OTH)其它用户
 #define  S_IXGRP    00010 
 #define  S_IRWXO    00007 
 #define  S_IROTH    00004 
+
+============IO多路复用(select/poll)============
+select/poll就相当于一个监控，去监控多个 fd 的数据情况，当某个 fd 产生数据，select/poll就会去告诉程序，有数据产生，然后程序去判断是那个fd产生数据
+
+select：
+select返回后会把以前加入的但并无事件发生的fd(fd_set中的fd)清空，所以通常需要备份一个fd_set,一是用于对比调用select返回后哪些位发生了变化，二是再次调用select监控相同fd时，不需要重复使用FD_SET赋值fd_set；所以通过对比前后的fd_set就可以得知是那个fd发生了事件(select并不会自动判断是那个fd发生事件，只有select检测到fd_set中的fd有事件发生就会返回)
+select会阻塞，select与轮询的不同，轮询在一个while中检测事件的发生，select以阻塞方式检测事件的发生，当事件发生后，内核告知程序，select返回并执行后面的程序
+可监视的最大文件数为宏 FD_SETSIZE
+int select(int nfds, fd_set *readfds, fd_set *writefds,fd_set *exceptfds, struct timeval *timeout)
+nfds：最大文件描述符加一，如现有3个fd分别是1,3,8，则nfds=8+1
+readfds：需要监控的read文件描述符集合
+writefds：需要监控的write文件描述符集合
+exceptfds：需要监控的异常处理文件描述符集合
+timeout：指定超时时间，0表示不等待;NULL永远等待;具体的等待时间
+成功：大于0
+超时:0
+失败：-1
+
+文件集合的操作函数：
+void FD_CLR(int fd, fd_set *set);	//将指定fd从set中删除
+int  FD_ISSET(int fd, fd_set *set);	//判断指定fd是否在set中，可以用于调用select之后测试文件描述符集中的文件描述符是否有变化
+void FD_SET(int fd, fd_set *set);	//将指定fd加入set中
+void FD_ZERO(fd_set *set);	//清空set
+
+每新建一个fd_set变量都需要清空fd_set，然后再把fd加入fd_set中
+
+poll：
+无限制最大监视文件数 
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+fds：一个struct pollfd类型，一般是一个结构体数组
+nfds：需要监听的文件个数
+timeout：监听超时时间
+成功：大于0，表示事件发生的pollfd结构的个数
+超时：0
+失败：-1
+struct pollfd {
+            int   fd;         /* file descriptor */
+            short events;     /* requested events */
+			//输入参数，指定需要监听的事件
+            short revents;    /* returned events */
+			//输出参数，返回已发生的事件
+           };
+events和revents宏:
+POLLIN：文件中有数据可读
+POLLPRI：文件中有异常事件(紧急事件)数据可读
+POLLOUT：可以向文件写入数据
+POLLRDHUP：未注释
+POLLERR：文件中出现错误，只限于输出
+POLLHUP：与文件的连接被断开了，只限于输出
+POLLNVAL：文件描述符是不合法的，即它并没有指向一个成功打开的文件
+POLLRDNORM：未注释
+POLLRDBAND：未注释
+POLLWRNORM：未注释
+POLLWRBAND：未注释
+
 
 ==========================库========================
 创建静态库；

@@ -1,0 +1,295 @@
+=======================串口编程========================
+Linux下串口设备名一般为 "/dev/ttySn" ,n是数字，若串口是 USB 扩展的，则串口设备文件命名多为/dev/ttyUSBn
+串口是一个终端设备
+
+最小termios：
+struct termios {
+		tcflag_t c_cflag  			/* 控制标志 */
+		tcflag_t c_iflag; 			/* 输入标志 */
+		tcflag_t c_oflag; 			/* 输出标志 */
+		tcflag_t c_lflag; 			/* 本地标志 */
+		tcflag_t c_cc[NCCS]; 		/* 控制字符 */
+};
+termios是在POSIX规范中定义的标准接口，表示终端设备（包括虚拟终端，串口等）。终端有 3 种工作模式，分别为规范模式(canonical mode)、非规范模式(non-canonical mode)和原始模式(raw mode).
+
+c_lflag 中设置 ICANNON 标志来定义终端的三种模式：
+规范模式:所有的输入是基于行进行处理。在用户输入一个行结束符（回车符、EOF等）之前，系统调用read()函数读不到用户输入的任何字符。除了EOF之外的行结束符（回车符等）与普通字符一样会被read()函数读取到缓冲区之中。在规范模式中，行编辑是可行的，而且一次调用read()函数最多只能读取一行数据。 
+
+非规范模式:所有的输入是即时有效的,不需要用户另外输入行结束符，而且不可进行行编辑。在非规范模式下，对参数 MIN(c_cc[VMIN])和 TIME(c_cc[VTIME])的设置决定read()函数的调用方式。设置可以有 4 种不同的情况。
+VMIN=0和VTIME=0：read()函数立即返回。若有可读数据，则读取数据并返回被读取的字节数，否则读取失败并返回 0。
+VMIN > 0 和 VTIME = 0： read()函数会被阻塞直到 MIN 个字节数据可被读取。
+VMIN = 0 和 VTIME > 0： 只要有数据可读或者经过 TIME 个十分之一秒的时间，read()函数则立即返回， 返回值为被读取的字节数。 如果超时并且未读到数据， 则 read()函数返回 0。
+VMIN > 0 和 VTIME > 0： 当有 MIN 个字节可读或者两个输入字符之间的时间间隔超过 VTIME个十分之一秒时，read()函数才返回。因为在输入第一个字符之后系统才会启动定时器，所以在这种情况下，read()函数至少读取一个字节之后才返回。
+
+原始模式:是一种特殊的非规范模式。在原始模式下，所有的输入数据以字节为单位被处理。在这个模式下，终端是不可回显的，而且所有特定的终端输入/输出控制处理不可用。通过调用 cfmakeraw()函数可以将终端设置为原始模式
+
+c_cflag:可以设置波特率、字符大小、数据位、停止位、奇偶校验位和硬软流控等
+	波特率：
+	B0 		0波特率（放弃 DTR）
+	… 
+	…
+	B115200 115200 波特率
+	
+	其它：
+	EXTA 		外部时钟率
+	EXTB 		外部时钟率
+	CSIZE 		数据位的位掩码
+	CS5 		5 个数据位
+	CS6 		6 个数据位
+	CS7 		7 个数据位
+	CS8 		8 个数据位
+	CSTOPB 		2 个停止位（不设则是 1 个停止位）
+	CREAD 		接收使能，允许输入被接收
+	PARENB		校验位使能
+	PARODD		使用奇校验而不使用偶校验
+	HUPCL 		最后关闭时挂线（放弃 DTR）
+	CLOCAL 		本地连接，不检测载波信号
+	CRTSCTS 	硬件流控
+不能直接对 c_cflag 成员初始化， 而要将其通过“与”、 “或” 操作使用其中的某些选项。
+设置硬件流控制：
+c_cflag |= CNEW_RTSCTS
+无硬件流控制：
+c_cflag &= ~CNEW_RTSCTS
+
+c_iflag:用于控制端口接收端的字符输入处理
+	INPCK 		奇偶校验使能
+	IGNPAR 		忽略奇偶校验错误
+	PARMRK 		奇偶校验错误掩码
+	ISTRIP 		裁减掉第 8 位比特
+	IXON 		启动输出软件流控
+	IXOFF 		启动输入软件流控
+	IXANY 		输入任意字符可以重新启动输出（默认为输入起始字符才重启输出）
+	IGNBRK 		忽略输入终止条件
+	BRKINT 		当检测到输入终止条件时发送 SIGINT 信号
+	INLCR 		将接收到的 NL（换行符） 转换为 CR（回车符）
+	IGNCR 		忽略接收到的 CR（回车符）
+	ICRNL 		将接收到的 CR（回车符） 转换为 NL（换行符）
+	IUCLC 		将接收到的大写字符映射为小写字符
+	IMAXBEL 	当输入队列满时响铃
+禁用软件流控制是禁止上面的选项 c_iflag &= ~(IXON | IXOFF | IXANY);
+	
+c_oflag 用于控制终端端口发送出去的字符处理
+	OPOST 		启用输出处理功能， 如果不设置该标志， 则其他标志都被忽略
+	OLCUC 		将输出中的大写字符转换成小写字符
+	ONLCR 		将输出中的换行符（‘\n’ ） 转换成回车符（‘\r’ ）
+	ONOCR 		如果当前列号为 0， 则不输出回车符
+	OCRNL 		将输出中的回车符（‘\r’ ） 转换成换行符（‘\n’ ）
+	ONLRET		不输出回车符
+	OFILL 		发送填充字符以提供延时
+	OFDEL 		如果设置该标志， 则表示填充字符为 DEL 字符， 否则为 NUL 字符
+	NLDLY 		换行延时掩码
+	CRDLY 		回车延时掩码
+	TABDLY		制表符延时掩码
+	BSDLY 		水平退格符延时掩码
+	VTDLY 		垂直退格符延时掩码
+	FFLDY 		换页符延时掩码
+因为现在终端的速度比以前快得多， 所以大部分延时掩码几乎没什么用途
+启用输出处理需要在 c_oflag 成员中启用 OPOST 选项 
+c_oflag |= OPOST;
+使用原始输出，就是禁用输出处理，使数据能不经过处理、过滤的完整地输出到串口。当 OPOST 被禁止，c_oflag 其它选项也被忽略
+c_oflag &= ~OPOST;
+
+c_lflag 用于控制控制终端的本地数据处理和工作模式
+	ISIG 		若收到信号字符（INTR、 QUIT 等） ， 则会产生相应的信号
+	ICANON 		启用规范模式
+	ECHO 		启用本地回显功能
+	ECHOE 		若设置 ICANON， 则允许退格操作
+	ECHOK 		若设置 ICANON， 则 KILL 字符会删除当前行
+	ECHONL		若设置 ICANON， 则允许回显换行符
+	ECHOCTL		
+				若设置 ECHO， 则控制字符（制表符、 换行符等） 会显示成“^X” ， 其中 X 的 ASCII
+				码等于给相应控制字符的 ASCII 码加上 0x40。 例如： 退格字符（0x08） 会显示为
+				“^H” （’H’的 ASCII 码为 0x48）
+	ECHOPRT 	若设置 ICANON 和 IECHO， 则删除字符（退格符等） 和被删除的字符都会被显示
+	ECHOKE 		若设置 ICANON， 则允许回显在 ECHOE 和 ECHOPRT 中设定的 KILL 字符
+	NOFLSH 		在通常情况下， 当接收到 INTR、 QUIT 和 SUSP 控制字符时， 会清空输入和输出
+	队列。 		如果设置该标志， 则所有的队列不会被清空
+	TOSTOP 		若一个后台进程试图向它的控制终端进行写操作， 则系统向该后台进程的进程组发送 SIGTTOU 信号。 该信号通常终止进程的执行
+	IEXTEN 		启用输入处理功能
+选择规范模式：c_lflag |= (ICANON | ECHO | ECHOE);
+选择原始模式：c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
+
+c_cc 定义特殊控制特性:
+	VINTR 		中断控制字符， 对应键为 CTRL+C
+	VQUIT 		退出操作符， 对应键为 CRTL+Z
+	VERASE		删除操作符， 对应键为 Backspace（BS）
+	VKILL 		删除行符， 对应键为 CTRL+U
+	VEOF 		文件结尾符， 对应键为 CTRL+D
+	VEOL 		附加行结尾符， 对应键为 Carriage return（CR）
+	VEOL2		第二行结尾符， 对应键为 Line feed（LF）
+	VMIN 		指定最少读取的字符数
+	VTIME		指定读取的每个字符之间的超时时间
+
+====================对串口的操作====================
+						打开串口
+非阻塞打开串口：
+open("/dev/ttyS1", O_RDWR | O_NOCTTY | O_NONBLOCK);
+	O_NOCTTY：如果打开的是一个终端设备，这个程序不会成为对应这个端口的控制终端，如果没有该标志，任何一个输入，例如键盘中止信号等，都将影响进程。
+	O_NONBLOCK：该标志与早期使用的O_NDELAY标志作用差不多。程序不关心DCD信号线的状态--也就是不关心端口另一端是否已经连接。如果不指定该标志，进程将一直在休眠状态，直到DCD信号线为0。简单点就是以非阻塞方式打开串口
+
+设置串口成阻塞方式：
+可用fcntl设置串口的阻塞/非阻塞
+阻塞：fcntl(fd,F_SETFL,0)
+fcntl中的F_SETFL只可以更改标志O_APPEND，O_NONBLOCK，O_SYNC 和 O_ASYNC；而 0 则表示清空这几个标志，其中O_NONBLOCK也没了，所以就变成了阻塞
+非阻塞：fcntl(fd,F_SETFL,O_NONBLOCK)
+
+检测打开的文件描述符是否连接到一个终端设备，进一步确认串口是否正确打开
+int isatty(int fd);
+检测fd是否是终端设备
+成功：0
+失败：-1
+
+					获取和设置termios
+int tcgetattr(int fd, struct termios *termptr);
+获取termios结构体(串口属性)
+termptr：接收返回的termios
+成功：0
+失败：-1
+可以通过此函数保存先前的串口配置
+
+int tcsetattr(int fd, int opt, const struct termios *termptr);
+设置串口属性
+opt：在串口驱动程序里有输入缓冲区和输出缓冲区。在改变串口属性时，缓冲区可能有数据存在，如何处理缓冲区中的数据，可通过 opt 参数实现
+	TCSANOW：更改立即发生；
+	TCSADRAIN：发送了所有输出后更改才发生，若更改输出参数则应用此选项；
+	TCSAFLUSH：发送了所有输出后更改才发生，在更改发生时未读的所有输入数据被删除（Flush）
+成功：0
+失败：-1
+	
+						设置波特率
+int cfsetispeed(struct termios *termptr, speed_t speed);
+设置输入波特率
+int cfsetospeed(struct termios *termptr, speed_t speed);
+设置输出波特率
+上面两个函数
+speed：波特率，如 B115200
+成功：0
+失败：-1
+通常来说，串口的输入和输出波特率都设置为同一个值
+
+					设置数据位(也称设置字符大小)
+通过 c_cflag 设置
+	CSIZE	//数据位屏蔽
+	CS5		//5个数据位
+	CS6
+	CS7
+	CS8
+设置串口的数据位为 8 位：
+c_cflag &= ~CSIZE;		//清除CSIZE
+c_cflag |= CS8;			//设置CS8
+
+						设置奇偶校验位
+设置串口的奇偶校验是在 c_cflag 设置
+PARENB 	进行奇偶校验
+PARODD 	奇校验，否则为偶校验
+无校验：
+c_cflag &= ~PARENB;
+偶校验：
+c_cflag |= PARENB;
+c_cflag &= ~PARODD;
+奇校验：
+c_cflag |= PARENB;
+c_cflag |= ~PARODD;
+
+						设置停止位
+设置串口停止位是在 c_cflag 设置
+设置 1 位停止位：
+c_cflag &= ~CSTOPB;		//清除CSTOPB标志位
+设置 2 位停止位：
+c_cflag |= CSTOPB;		//设置CSTOPB标志位
+
+					设置最少字符和等待时间
+c_cc[VTIME]和c_cc[VMIN]设置最少字符和等待时间,针对read而言
+设置任何情况下read()函数立即返回：
+c_cc[VTIME] = 0;
+c_cc[VMIN] = 0;
+
+						清除串口缓冲
+由于串口在重新设置之后，需要对当前的串口设备进行适当的处理，通常使用tcflush实现
+
+int tcdrain(int fd); 
+使程序阻塞，直到输出缓冲区的数据全部发送完毕
+int tcflow(int fd, int action) ; 
+用于暂停或重新开始输出
+int tcflush(int fd, int queue_selector); 
+用于清空输入/输出缓冲区
+例：
+使用tcflush()函数，对于在缓冲区中的尚未传输的数据，或者收到的
+但是尚未读取的数据进行处理
+queue_selector：
+	TCIFLUSH： 对接收到而未被读取的数据进行清空处理。
+ 	TCOFLUSH： 对尚未传送成功的输出数据进行清空处理。
+ 	TCIOFLUSH：即对尚未处理的输入输出数据进行清空处理
+
+						激活选项
+CLOCAL 和 CREAD 分别用于本地连接和接受使能
+激活这两个选项：
+c_cflag |= CLOCAL | CREAD;
+
+						激活串口配置(属性)
+在完成全部串口配置之后， 要激活刚才的配置并使配置生效。
+使用属性设置函数 tcsetattr() ，前面已有其说明
+
+						向串口写数据
+直接调用wtrite()即可
+
+						从串口读数据
+调用read()读取串口数据，但在非规范模式/原始模式下需要设置VMIN和VTIME。
+VMIN：非规范模式下读取的最小字符数
+VTIME：非规范模式下读数据时的延时，VTIME个十分之一秒
+有四种情况：
+VMIN=0,VTIME=0:读取的最少字符数为0,延时时间为0,read立即返回
+VMIN>0,VTIME=0:read阻塞到读取VMIN个字符才返回
+VMIN=0,VTIME>0:有数据就返回，无数据等待VTIME个十分之一秒返回
+VMIN>0,VTIME>0:读取VMIN个字符或前后两个字符的输入间隔超过VTIMR个十分之一秒后返回，因为在输入第一个字符之后系统才会启动定时器，所以在这种情况下，read至少读取一个字符
+
+						串口操作顺序
+	1.保存原有串口属性(可选)
+	2.设置波特率
+	3.设置激活选项，如c_cflag |= CLOCAL | CREAD;
+	4.设置数据位大小
+	5.设置奇偶校验位
+	6.设置停止位
+	7.设置输出(可选),如c_oflag=0;0是清空标志;c_oflag&=~OPOST;
+	8.设置输入(可选)
+	9.设置c_lflag，如原始模式cfmakeraw(&termios)
+	10.设置读取特性，c_cc[VTIME]和c_cc[VMIN]
+	11.刷新缓冲区，tcflush()
+	12.设置串口属性,tcsetattr()
+
+
+串口知识点补充：
+DCD：载波检测。数据载波检测，用于DTE告知对方，本机是否收到对方的载波信号，即主从之间有没有连接。
+RTS：请求发送。主机请求设备发送数据
+CTS：允许发送。设备回应主机请求，告知主机是否可以发送数据
+硬件流控制：通过RTS、CTS等线控制数据的收发
+
+什么是流控制？
+两个串行接口之间的传输数据流通常需要协调一致才行。这可能是由于用以通信的某个串行接口或者某些存储介质的中间串行通信链路的限制造成的。对于异步数据这里有两个方法做到这一点。
+
+第一种方法通常被叫做“软件”流控制。这种方法采用特殊字符来开始(XON，DC1，八进制数021)或者结束(XOFF，DC3或者八进制数023)数据流。而这些字符都在ASCII中定义好了。虽然这些编码对于传输文本信息非常有用，但是它们却不能被用于在特殊程序中的其他类型的信息。
+
+第二种方法叫做“硬件”流控制。这种方法使用RS-232标准的CTS和RTS信号来取代之前提到的特殊字符。当准备就绪时，接受一方会将CTS信号设置成为space电压，而尚未准备就绪时它会被设置成为mark电压。相应得，发送方会在准备就绪的情况下将RTS设置成space电压。正因为硬件流控制使用了于数据分隔的信号，所以与需要传输特殊字符的软件流控制相比它的速度很快。但是，并不是所有的硬件和操作系统都支持CTS/RTS流控制。
+
+硬件流控制：RTS、CTS或DTR、CTS
+软件流控制：XON/OFF
+
+因为普通用户不能直接访问串口设备文件，以下有三种解决方法：
+	1.改变设备文件的访问权限设置[#cd9bd1e0]
+	2.以root超级用户的身份运行程序[#kdd0e577]
+	3.将你的程序编写位setuid程序，以串口设备所有者的身份运行程序 [#s7b703ff]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

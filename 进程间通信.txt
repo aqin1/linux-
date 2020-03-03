@@ -1,0 +1,461 @@
+========================进程间通信=====================
+进程间通信的方式：
+	早期UNIX进程间通信方式：
+		无名管道(pipe)
+		有名管道(fifo)
+		信号(signal)
+	System V IPC：
+		共享内存(share memory)
+		消息队列(message queue)
+		信号灯集(semaphore set)
+		
+	套接字
+
+=====================无名管道=========================
+无名管道特点：
+	只能用于有亲缘(父子,兄弟)关系的进程之间的通信
+	半双工的通信模式，具有固定的读端和写端
+	无名管道创建时会返回两个文件描述符，分别用于读写管道
+单工：任何时刻只能向一个方向传输数据,如主机到从机,而永远也从机不能到主机
+半双工：在同一个时刻只能向一个方向传输数据，可以主到从，也可以从到主，如iic
+全双工：同一时刻数据可以在两个方向上传输，主到从的同时也可以从到主，如spi，UART
+
+创建无名管道：
+int pipe(int pipefd[2])
+pipefd：包含两个元素的整型数组，用来保存文件描述符
+pipefd[0]:用于读管道
+pipefd[1]:用于写管道
+成功：0
+失败：-1
+
+为什么无名管道只能用于亲缘进程间通信：
+	父进程创建子进程时，子进程复制(继承)父进程的打开的文件，无名管道是一种特殊文件，只存在于内存中，所以子进程也复制了无名管道，子进程和父进程都拥有同一个无名管道的读端和写端，因此父子进程可以通信；因为无名管道没有具体的文件，所以不具有亲缘关系的进程无法获得另一个进程的无名管道
+	
+父子进程都具有无名管道的读端和写端，子进程可以从父进程读取和写入数据，父进程也可以向子进程读取和写入数据，但是这种做法不常见，一般一个进程只使用一个无名管道的一个端，且把进程中不用的那个端给关闭。通过创建两个无名管道可以实现双工通信，但要考虑死锁问题。具体解释可以看《UNIX系统编程下》管道章节
+
+先创建无名管道再创建子进程
+
+一个无名管道可以用于多个进程之间的通信，如子进程1，子进程2···使用pipefd[0]（读），父进程和子进程m使用pipefd[1]（写）
+
+无名管道存在于内存，数据被读走后就没有了，不支持定位操作
+
+读无名管道：
+  写端存在
+		有数据		read返回实际读取的字节数
+		无数据		进程读阻塞
+  写端存在：即pipefd[1]没有被close(pipefd[1])
+  
+  写端不存在
+		有数据		read返回实际读取的字节数
+		无数据		read返回0
+  写端不存在：若已close(pipefd[1]),则不存在写端
+  有数据时，read至少读取到一个字符才会返回
+
+写无名管道：
+  读端存在：
+		有空间		write返回实际写入的数据
+		无空间		进程阻塞,直到写完所有数据(不保证原子操作)
+
+  读端不存在：
+		有空间		异常结束，管道断裂
+		无空间		异常结束，管道断裂
+  不具读端则写入的数据无用，所有管道断裂
+
+无名管道具有一定的大小,通过循环写入管道直到阻塞就获得管道大小
+
+如果多个进程写入同一个管道，那么如果他们同一时刻写入的数据量不超过PIPE_BUF字节，那么就可以确保写入数据不会发生相互混合的情况。简单来说就是写入数据时不发生阻塞的写操作是原子的，若写操作发生阻塞则不能保证原子性。
+
+不同系统的PIPE_BUF是不同的，在limits.h中定义，或通过fpathconf(fd,_PC_PIPE_BUF)来返回。
+
+管道的存储能力(不是PIPE_BUF)是有限的，管道其实是内核内存中维护的缓冲器，fcntl(fd,F_SETPIPE_SZ,size)可以修改管道的存储能力，fcntl(fd,F_GETPIPE_SZ)可以获得管道的存储能力。
+
+关闭进程中不用的读端或写端是很有必要的操作
+
+=========================有名管道======================
+有名管道特性：
+	对应管道文件(有具体文件)，可用于任意进程之间进行通信
+	打开管道时可指定读写方式
+	通过文件IO操作，内容存放在内存中，当有名管道被关闭后，文件中的内容会被释放
+	
+创建有名管道(FIOF)
+int mkfifo(const char *pathname, mode_t mode)
+pathname：创建管道文件路径
+mode：管道文件权限和打开方式,如0666或O_RDONLY、O_NONBLOCK等宏
+成功：0
+失败：-1
+
+也可以使用" mknod 管道名 p " 来创建有名管道
+
+有名管道打开时有可能会阻塞，只打开有名管道的读端或写端时，open管道文件时就会阻塞，只有当读端和写端都打开时才会退出阻塞
+======================信号机制=====================
+信号是在软件层次上对中断机制的一种模拟，是一种异步通信方式
+Linux内核通过信号通知用户进程，不同的信号类型代表不同的事件
+Linux对早期的Unix信号机制进行了扩展
+进程对信号有不同的响应方式
+	缺省方式
+	忽略方式
+	捕捉方式，定义信号处理函数
+
+常用信号：
+	信号名：  含义：								默认操作:
+	SIGHUP	  该信号在用户终端关闭时产生，通常是		终止
+			  发给和该终端关联的会话内的所有进程
+	SIGINT    该信号在用户键入INTR字符(Ctrl-C)时产生    终止
+			  ,内核发送此信号送到当前终端的所有前台进程
+	SIGQUIT   该信号和SIGINT类似,但由QUIT字符(通常是    终止
+			  ctrl-\)来产生
+	SIGILL    该信号在一个进程企图执行一条非法指令      终止
+			  时产生
+	SIGSEV    该信号在非法访问内存时产生，如野指针、    终止
+			  缓冲区溢出
+	SIGPIPE   当进程往一个没有读端的管道中写入时产生    终止
+			  代表“管道断裂”
+	SIGKILL   该信号用来结束进程，并且不能被捕捉和忽略  终止
+	SIGSTOP   该信号用于暂停进程，并且不能被捕捉和忽略  暂停
+	SIGTSTP   该信号用于暂停进程，用户可键入SUSP字符    暂停
+			  (通常是Ctrl-Z)发出这个信号
+	SIGCONT   该信号让进程进入运行态                 继续运行
+	SIGALRM   该信号用于通知进程定时器时间已到           终止
+	SIGUSR1/2 该信号保留给用户程序使用                   终止
+	
+kill -l	可以查看有什么信号
+kill -num PID  给PID进程发送num信号，如 kill -9 6437
+kill -num -PID 给PID这个进程组的所有进程发送信号num
+kill -num -1   向除了init和自己外的所有进程发送信号 
+
+信号的发送：
+int kill(pid_t pid, int sig)
+pid：接送信号的进程号；0代表同组进程；-1表示所有进程
+sig：信号类型
+成功：0
+失败：-1
+
+int raise(int sig)
+向当前进程发送信号
+sig：信号类型
+成功：0
+失败：-1
+
+unsigned int alarm(unsigned int seconds)
+创建一个定时器，到时就会产生一个 SIGALRM 信号
+alarm经常用于实现超时检测
+seconds：定时器时间单位是秒，0表示取消定时器
+成功：返回上个定时器的剩余时间
+失败：-1
+一个进程中只能设定一个定时器，时间到时产生SIGALRM信号，创建新定时器，旧的定时器就会失效
+
+int pause(void)
+进程一直阻塞，直到被信号中断
+被信号中断后返回-1，errno 为 EINTR
+
+typedef void (*sighandler_t)(int)
+sighandler_t 等价于 void (*sighandler_t)(int)
+sighandler_t  signal(int signum, sighandler_t handler)
+将某个信号与该信号的处理函数关联起来，用来指定接收到某个信号后进程要做的事，类似于中断。
+signum：要关联的信号类型
+handler：指定信号处理函数；SIG_DFL代表缺省方式；SIG_IGN代表忽略信号
+成功：返回原先的信号处理函数
+失败：返回SIG_ERR
+例：
+void handler_function(int signo) //信号处理函数
+{
+	switch(signo)	//判断信号类型，只有一个信号不用判断
+	{
+		case SIGINT
+		case SIGQUIT
+	}
+}
+int main(void)
+{
+	signal(SIGINT,handler_function);	
+	//关联信号SIGINT，不会阻塞在该处
+	signal(SIGQUIT,handler_function);	
+	//关联信号SIGQUIT，不会阻塞在该处
+	while(1) pause();					
+	//等待信号
+}
+
+信号扩展知识：
+int sigaction(int signum, const struct sigaction *act,struct sigaction *oldact)
+与上一个函数功能类似，但是比是一个函数更新更安全，推荐使用
+signum：要关联的信号类型，可以为除SIGKILL及SIGSTOP外的任何一个特定有效的信号
+act：指向结构sigaction的一个实例的指针，指定对特定信号的处理
+oldact：保存原来对相应信号的处理
+
+struct sigaction {
+             void      (*sa_handler)(int);
+             void (*sa_sigaction)(int,siginfo_t *,void *);
+             sigset_t   sa_mask;
+             int        sa_flags;
+             void      (*sa_restorer)(void);
+           };
+	sa_handler：信号处理函数，与上一个同
+	sa_sigaction：暂时不用
+	sa_mask：一个信号集，以可指定哪些应当信号要被屏蔽
+	sa_flags：标志位
+	sa_restorer：暂时不用
+sa_flags常用标志:
+	SA_NODEFER \ SA_NOMASK	当捕捉到此信号时，在执行其信号捕捉函数时，系统不会自动屏蔽此信号
+	SA_NOCLDSTOP
+	进程忽略子进程产生的任何 SIGSTOP、 SIGTSTP、 SIGTTIN 和SIGTTOU 信号
+	SA_RESTART
+	令重启的系统调用起作用
+	SA_ONESHOT\SA_RESETHAND
+	自定义信号只执行一次， 在执行完毕后恢复信号的系统默认动作
+
+int sigemptyset(sigset_t *set)
+将指定的 set 初始化为空，
+如：sigemptyset(sa_mask) ,即将sa_mask设置为空,不屏蔽任何信号
+
+sigemptyset()： 将信号集合初始化为空。
+sigfillset()： 将信号集合初始化为包含所有已定义的信号的集合
+sigaddset()： 将指定信号加入到信号集合中去。
+sigdelset()： 将指定信号从信号集合中删除。
+sigismember()： 查询指定信号是否在信号集合之中。
+
+==================System V IPC==================
+IPC:进程间通信
+IPC对象包含：共享内存、消息队列和信号灯集
+每个IPC对象有唯一的ID
+IPC对象创建后一直存在，直到被显式的删除
+每个IPC对象有一个关联的KEY,若KEY=0是私有IPC，其它进程不能通过KEY获取该IPC的ID
+ipcs/ipcrm
+
+生成 KEY：
+key_t ftok(const char *pathname, int proj_id)
+通过pathname和proj_id(project identifider)生成上面提到的 KEY
+pathname：存在且可访问的文件或目录的路径
+proj_id：用于生成KEY的数字，不能为 0 
+成功：返回合法的 KEY 值
+失败：-1
+当pathname和proj_id相同时，ftok生成的 KEY 也相同
+例：ftok(".",'a')
+
+========================共享内存======================
+共享内存：
+	共享内存是一种最为高效的进程间通信方式，进程可以直接读写内存，而不需要任何数据的拷贝
+	共享内存在内核空间创建，可被进程映射到用户空间访问，使用灵活
+	由于多个进程可同时访问共享内存，因此需要同步和互斥机制配合使用
+
+共享内存使用步骤：
+	1.创建/打开共享内存	2.映射共享内存，即把指定的共享内存映射到进程的地址空间用于访问
+	3.读写共享内存
+	4.撤销共享内存映射
+	5.删除共享内存对象
+	
+int shmget(key_t key, size_t size, int shmflg)
+分配一个共享内存段
+key：和共享内存关联的key,IPC_PRIVATE(为0,私有key)或ftok生成
+size：分配共享内存的大小，以字节为单位
+shmflg：共享内存标志位 IPC_CREAT | 0666
+IPC_CREAT表示若不存在与key关联的共享内存就创建,存在返回与key关联的id
+IPC_EXCL只有在共享内存不存在的时候，新的共享内存才建立，否则就产生错误。
+0666 ：指定这段内存的权限
+成功：返回共享内存的ID
+失败：-1
+
+void *shmat(int shmid, const void *shmaddr, int shmflg)
+共享内存映射
+shmid：要映射的共享内存id
+shmaddr：映射后的地址，NULL标志由系统自动映射
+shmflg：标志位，0表示可读写；SHM_RDONLY表示只读
+成功：返回映射后的地址
+失败：(void*)-1
+
+int shmdt(const void *shmaddr)
+共享内存撤销映射，不使用共享内存时应撤销映射
+进程结束时自动撤销，但并不会自动删除这段共享内存
+shmaddr：要撤销映射地址
+成功：0
+失败：-1
+
+int shmctl(int shmid, int cmd, struct shmid_ds *buf)
+共享内存的控制
+shmid：要操作的共享内存的id
+cmd：要执行的操作 
+	IPC_STAT  获取属性
+	IPC_SET   设置属性
+	IPC_RMID  删除id
+buf：保存或设置共享内存属性的地址，每新建一个共享内存都会生成一个 struct shmid_ds 用于保存这个共享内存的属性
+
+每块共享内存大小有限制，可以通过下列方法查看
+	ipcs -l
+	cat /proc/sys/kernel/shmmax
+	
+共享内存一般由第一个进程创建，由最后一个进程删除
+
+使用 shmctl(shmid,IPC_RMID,NULL) 只是添加删除标志
+
+每个进程在调用 shmat() 时，nattach 值自动加一，调用shmdt()时，nattach自动减一，只有当nattach为 0 且使用shmctl添加了删除标志后，共享内存才真正的被删除
+
+共享内存不会随着程序的结束而自动删除，必须手动删除
+
+=========================消息队列======================
+消息队列：
+	消息队列是System V IPC 对象的一种
+	消息队列由消息队列ID来唯一标识
+	消息队列就是一个消息的列表。用户可以在消息队列中添加消息、读取消息等
+	消息队列可以按照类型来发送/接收消息
+	
+消息队列使用步骤：
+	1.打开/创建消息队列 msgget
+	2.向消息队列发送消息 msgsnd
+	3.从消息队列接收消息 msgrcv
+	4.控制消息队列 msgctl
+	
+创建消息队列：
+	int msgget(key_t key, int msgflg)
+		key:和消息队列关联的key。IPC_PRIVATE(为0,私有)或 ftok
+		msgflg:标志位。IPC_CREAT | 0666
+		成功：返回消息队列的ID
+		失败：-1
+
+向消息队列发送消息：
+	int msgsnd(int msqid,const void *msgp,size_t msgsz,int msgflg);
+		msqid：消息队列id
+		msgp：消息缓冲区地址，存放要发送消息的地址
+		msgsz：消息正文长度,即减去首成员的long类型
+		msgflg：标志位。0(没空间就阻塞)或IPC_NOWAIT(非阻塞)
+		成功：0
+		失败：-1
+消息的格式：
+		通信双方首先定义好统一的消息格式
+		用户根据应用需求定义结构体类型
+		首成员类型为 long，代表消息类型(正整数)
+		其他成员都属于消息正文
+	如 typedef struct 
+	{
+		long mytype;
+		char mtext[64];
+	}MSG;
+
+消息的接收：
+    ssize_t msgrcv(int msqid, void *msgp, size_t msgsz, long msgtyp,int msgflg)
+	msqid:同上
+	msgp:用于存放接收到的消息
+	msgsz:同上
+	msgtyp:指定接收的消息类型
+		0表示接收消息队列最早(第一个)的消息
+		大于 0： 接收消息队列中第一个类型为 msgtyp 的消息
+		小于 0： 接收消息队列中第一个类型值不小于msgtyp
+				 绝对值且类型值又最小的消息
+	msgflg:同上
+	成功：收到的消息长度
+	失败：-1
+不同进程间有自己的消息类型，类似ID，通过消息类型区分消息
+可以这样指定消息类型 msg_type = getpid()
+
+控制消息队列：
+	int msgctl(int msqid, int cmd, struct msqid_ds *buf)
+		msqid：消息队列id
+		cmd：要执行的操作 
+			IPC_STAT	获取属性
+			IPC_SET		设置属性
+			IPC_RMID	删除消息队列
+		buf：存放消息队列属性的地址
+		成功：0
+		失败：-1
+	使用IPC_RMID会立即删除消息队列，无论其它进程有无消息队列的操作，这点与共享内存不同
+
+======================信号灯=========================
+信号灯也叫信号量，用于进程/线程同步或互斥的机制
+信号灯的类型
+	Posix 无名信号灯
+	Posix 有名信号灯
+	System V 信号灯
+信号灯的含义：
+	计数信号灯
+	
+System V IPC 信号灯特点：
+	System V 信号灯是一个或多个计数信号灯的集合
+	可同时操作集合中的多个信号灯
+	申请多个资源时避免死锁、
+	
+System V 信号灯使用步骤：
+	1.打开/创建信号灯 semget
+	2.信号灯初始化 semctl
+	3.P/V操作 semop
+	4.删除信号灯 semctl
+	
+打开/创建信号灯：
+int semget(key_t key, int nsems, int semflg)
+	key：和信号灯关联的key。IPC_PRIVATE或ftok
+	nsems：集合中包含的计数信号灯个数
+	semflg：标志位。IPC_CREAT|0666 、IPC_EXCL
+	成功：返回信号灯的id
+	失败：-1
+创建信号灯的进程应该初始化信号灯
+if(semget(key,2,0666|IPC_CREAT|IPC_EXCL) == -1)
+{
+	if(errno == EEXIST)		//判断信号灯是否存在
+	{
+		semget(key,2,0666);		//存在则只打开信号灯
+	}
+}
+else
+{
+	初始化信号灯;		//如果信号灯是新建的，则初始化它
+}
+
+信号灯初始化：
+int semctl(int semid, int ·semnum, int cmd, ...)
+	semid：信号灯集id
+	semnum：要操作的集合中的信号灯编号，从0开始
+	cmd：执行的操作 SETVAL(设置属性) IPC_RMID
+	union semun：取决于cmd，cmd是SETVAL时，用到这个参数
+	成功：0
+	失败：-1
+union semun{
+	int val;				//Value for SETVAL
+	struct semid_ds *buf;	//Buffer for IPC_STAT, IPC_SET
+	unsigned short *array;	//Array for GETALL, SETALL
+	struct seminfo *_buf;	//Buffer for IPC_INFO
+}
+例：
+union semnun myun;
+myun.val = 2;
+if(semctl(semid,0,SETVAL,myun)<0)
+{
+	perror("semctl");
+	exit(-1);
+}
+myun.val = 0;
+if(semctl(semid,1,SETVAL,myun)<0)
+{
+	perror("semctl");
+	exit(-1); 
+}
+
+信号灯P/V操作：
+int semop(int semid, struct sembuf *sops, size_t nsops)
+	semid：要操作的信号灯集id
+	*sops：描述信号灯操作的结构体(数组)
+	nsops：要操作的信号灯的个数
+	成功：0
+	失败：-1
+
+struct sembuf 
+{
+	short semnum;	//信号灯编号
+	short sem_op;	//-1 标志P操作，1表示V操作
+	short sem_flg;	//0 、IPC_NOWAIT
+};
+
+
+
+kill -l		查看所有信号的类型
+ipcs -l		查看共享内存、消息队列、信号灯集等信息
+
+
+
+
+
+
+
+
+
+
+
+
+
+
